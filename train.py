@@ -1,53 +1,103 @@
-import numpy as np
-import torch 
-from torch_geometric.data import DataLoader
+from matplotlib import pyplot as plt
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torchvision
+from torch_geometric.nn import GATConv, global_mean_pool
 from torchvision import datasets, transforms
+from torchvision.transforms import RandomHorizontalFlip, RandomCrop, RandomRotation, ColorJitter, RandomAffine, RandomPerspective, RandomResizedCrop, GaussianBlur
+from torchvision.datasets import CIFAR10
+from torch.utils.data import DataLoader 
+from torch.optim import Adam
 from tqdm import tqdm
-from util import image_to_superpixel_graph	
-from architecture.GCN import GCN
 
+from architecture.gat2 import HybridGATModel
 
-transform = transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: (x * 255).byte().numpy())])
-cifar10_train = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-cifar10_test = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+train_transform = transforms.Compose([
+    RandomHorizontalFlip(),
+    RandomCrop(32, padding=4),
+    transforms.ToTensor(),
+    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+])
 
-train_data_list = [image_to_superpixel_graph(img[0], img[1]) for img in cifar10_train]
-test_data_list = [image_to_superpixel_graph(img[0], img[1]) for img in cifar10_test]
+test_transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+])
 
-train_loader = DataLoader(train_data_list, batch_size=32, shuffle=True)
-test_loader = DataLoader(test_data_list, batch_size=32, shuffle=False)
+batch_size = 32
+
+trainset = CIFAR10(root='./data', train=True, download=True, transform=train_transform)
+train_loader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
+
+testset = CIFAR10(root='./data', train=False, download=True, transform=test_transform)
+test_loader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = GCN(in_channels=3, hidden_channels=64).to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-criterion = torch.nn.CrossEntropyLoss()
+model = HybridGATModel().to(device)
+optimizer = Adam(model.parameters(), lr=0.001)
+criterion = nn.NLLLoss()
 
-def train():
+losses = []
+accuracies = []
+
+def train(epoch):
     model.train()
     total_loss = 0
-    for data in tqdm(train_loader, desc="Training", leave=False):
-        data = data.to(device)
+    progress_bar = tqdm(train_loader, desc=f'Epoch {epoch+1} [TRAIN]', total=len(train_loader))
+    for images, labels in progress_bar:
+        images, labels = images.to(device), labels.to(device)
         optimizer.zero_grad()
-        out = model(data)
-        loss = criterion(out, data.y)
+        output = model(images)
+        loss = criterion(output, labels)
         loss.backward()
         optimizer.step()
         total_loss += loss.item()
-    return total_loss / len(train_loader)
+        progress_bar.set_postfix(loss=loss.item())
+    avg_loss = total_loss / len(train_loader)
+    losses.append(avg_loss)
+    return avg_loss
 
-def test():
+def test(epoch):
     model.eval()
     correct = 0
-    for data in tqdm(test_loader, desc="Testing", leave=False):
-        data = data.to(device)
-        with torch.no_grad():
-            pred = model(data).max(dim=1)[1]
-        correct += pred.eq(data.y).sum().item()
-    return correct / len(test_loader.dataset)
+    total = 0
+    progress_bar = tqdm(test_loader, desc=f'Epoch {epoch+1} [TEST]', total=len(test_loader))
+    with torch.no_grad():
+        for images, labels in progress_bar:
+            images, labels = images.to(device), labels.to(device)
+            output = model(images)
+            pred = output.argmax(dim=1)
+            correct += (pred == labels).sum().item()
+            total += labels.size(0)
+            progress_bar.set_postfix(accuracy=100. * correct / total)
+    accuracy = 100. * correct / total
+    accuracies.append(accuracy)
+    return accuracy
 
-epochs = 10
-for epoch in range(epochs):
-    print(f'Epoch {epoch+1}/{epochs}')
-    train_loss = train()
-    test_acc = test()
-    print(f'Epoch: {epoch:03d}, Train Loss: {train_loss:.4f}, Test Acc: {test_acc:.4f}')
+
+best_accuracy = 0
+for epoch in range(50):
+    train_loss = train(epoch)
+    test_acc = test(epoch)
+    if test_acc > best_accuracy:
+        best_accuracy = test_acc
+        torch.save(model.state_dict(), 'best_model_GAT_cnn_power_adam.pth')
+    print(f'Epoch: {epoch+1}, Training Loss: {train_loss:.4f}, Test Accuracy: {test_acc:.2f}%')
+
+
+plt.figure(figsize=(12, 5))
+plt.subplot(1, 2, 1)
+plt.plot(losses, label='Training Loss')
+plt.title('Training Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(accuracies, label='Test Accuracy')
+plt.title('Test Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy (%)')
+plt.legend()
+plt.show()
