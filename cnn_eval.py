@@ -4,95 +4,54 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torch.nn.functional as F
 
+poolSize = 2
+poolStride = 2
+
+conv1KSize = 3
+conv1Pad = 0
+conv1Stride = 1    
+
+conv1FMSize = (32 - conv1KSize + (2*conv1Pad)) / conv1Stride + 1
+conv1AfterPool = (conv1FMSize - poolSize) / poolStride + 1
+if not (conv1FMSize).is_integer() or not (conv1AfterPool).is_integer():
+    print("WARNING: VALUES SELECTED FOR CONV1 LAYER ARE INVALID")
+conv1FMSize = int(conv1FMSize)
+conv1AfterPool = int(conv1AfterPool)
+
+conv2KSize = 4
+conv2Pad = 0
+conv2Stride = 1
+
+conv2FMSize = (conv1AfterPool - conv2KSize + (2*conv2Pad)) / conv2Stride + 1 
+conv2AfterPool = (conv2FMSize - poolSize) / poolStride + 1
+if not (conv2FMSize).is_integer() or not (conv2AfterPool).is_integer():
+    print("WARNING: VALUES SELECTED FOR CONV2 LAYER ARE INVALID")
+conv2FMSize = int(conv2FMSize)
+conv2AfterPool = int(conv2AfterPool)
+
 class Net(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
-        nn.init.kaiming_uniform_(self.conv1.weight)
-        self.bn1 = nn.BatchNorm2d(32)
-
-        self.conv2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
-        nn.init.kaiming_uniform_(self.conv2.weight)
-        self.bn2 = nn.BatchNorm2d(32)
-
-        self.pool1 = nn.MaxPool2d(2, 2)
-        self.drop1 = nn.Dropout2d(0.2)
-
-        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        nn.init.kaiming_uniform_(self.conv3.weight)
-        self.bn3 = nn.BatchNorm2d(64)
-
-        self.conv4 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
-        nn.init.kaiming_uniform_(self.conv4.weight)
-        self.bn4 = nn.BatchNorm2d(64)
-
-        self.pool2 = nn.MaxPool2d(2, 2)
-        self.drop2 = nn.Dropout2d(0.3)
-
-        self.conv5 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        nn.init.kaiming_uniform_(self.conv5.weight)
-        self.bn5 = nn.BatchNorm2d(128)
-
-        self.conv6 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
-        nn.init.kaiming_uniform_(self.conv6.weight)
-        self.bn6 = nn.BatchNorm2d(128)
-
-        self.pool3 = nn.MaxPool2d(2, 2)
-        self.drop3 = nn.Dropout2d(0.4)
-
-        self.conv7 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
-        nn.init.kaiming_uniform_(self.conv7.weight)
-        self.bn7 = nn.BatchNorm2d(128)
-
-        self.conv8 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
-        nn.init.kaiming_uniform_(self.conv8.weight)
-        self.bn8 = nn.BatchNorm2d(128)
-
-        self.drop4 = nn.Dropout2d(0.4)
-
-        self.fc1 = nn.Linear(128 * 4 * 4, 128)
-        nn.init.kaiming_uniform_(self.fc1.weight)
-        self.bn9 = nn.BatchNorm1d(128)
-        self.drop5 = nn.Dropout(0.5)
-        
-        self.fc2 = nn.Linear(128, 64)
-        nn.init.kaiming_uniform_(self.fc2.weight)
-        self.bn10 = nn.BatchNorm1d(64)
-        self.drop6 = nn.Dropout(0.5)
-
-        self.fc3 = nn.Linear(64, 10)
+        self.conv1 = nn.Conv2d(3, 16, conv1KSize)
+        self.pool = nn.MaxPool2d(poolSize, poolStride)
+        self.conv2 = nn.Conv2d(16, 64, conv2KSize)
+        self.fc1 = nn.Linear(64 * conv2AfterPool * conv2AfterPool, 120)
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 10)
 
     def forward(self, x):
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = self.drop1(self.pool1(x))
-
-        x = F.relu(self.bn3(self.conv3(x)))
-        x = F.relu(self.bn4(self.conv4(x)))
-        x = self.drop2(self.pool2(x))
-
-        x = F.relu(self.bn5(self.conv5(x)))
-        x = F.relu(self.bn6(self.conv6(x)))
-        x = self.drop3(self.pool3(x))
-
-        x = F.relu(self.bn7(self.conv7(x)))
-        x = F.relu(self.bn8(self.conv8(x)))
-        x = self.drop4(x)
-
-        x = x.view(-1, 128 * 4 * 4)
-
-        x = F.relu(self.bn9(self.fc1(x)))
-        x = self.drop5(x)
-
-        x = F.relu(self.bn10(self.fc2(x)))
-        x = self.drop6(x)
-
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = torch.flatten(x, 1) # flatten all dimensions except batch
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
         x = self.fc3(x)
         return x
 
+
 # Load the trained model
 model = Net()
-model.load_state_dict(torch.load('models/82_cifar_cnn_cq.pth'))
+model.load_state_dict(torch.load('models/69_cnn_cq.pth'))
 model.eval()
 
 # Define data transforms for the CIFAR-10 dataset
@@ -120,3 +79,33 @@ with torch.no_grad():  # Disable gradient tracking during evaluation
 
 # Print the accuracy
 print('Accuracy on the test set: {:.2f}%'.format(100 * correct / total))
+
+classes = ('plane', 'car', 'bird', 'cat',
+           'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+
+# prepare to count predictions for each class
+correct_pred = {classname: 0 for classname in classes}
+total_pred = {classname: 0 for classname in classes}
+
+# again no gradients needed
+with torch.no_grad():
+    for images, labels in test_loader:
+        outputs = model(images)
+        _, predicted = torch.max(outputs, 1)
+        # collect the correct predictions for each class
+        for label, prediction in zip(labels, predicted):
+            if label == prediction:
+                correct_pred[classes[label]] += 1
+            total_pred[classes[label]] += 1
+
+print(f"|{'|'.join(classes)}|") 
+a = "".join(['|---' for i in range(len(classes))])
+print(f"{a}|")
+
+# print accuracy for each class
+scores = []
+for classname, correct_count in correct_pred.items():
+    accuracy = 100 * float(correct_count) / total_pred[classname]
+    scores.append(str(accuracy) + "%")
+
+print(f"|{'|'.join(scores)}|")
